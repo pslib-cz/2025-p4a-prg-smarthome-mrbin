@@ -3,6 +3,7 @@ esphome:
   friendly_name: Mr. Bin
   platformio_options:
     board_build.flash_mode: dio
+    board_build.arduino.memory_type: dio_opi
     build_flags:
       - "-DBOARD_HAS_PSRAM"
       - "-mfix-esp32-psram-cache-issue"
@@ -12,6 +13,10 @@ esp32:
   flash_size: 16MB
   framework:
     type: arduino
+
+psram:
+  mode: octal
+  speed: 80MHz
 
 logger:
 
@@ -35,6 +40,111 @@ captive_portal:
 spi:
   clk_pin: GPIO12
   mosi_pin: GPIO11
+  miso_pin: GPIO13
+
+globals:
+  - id: blink_state
+    type: bool
+    initial_value: 'false'
+  - id: blink_timer
+    type: int
+    initial_value: '0'
+  - id: touch_start_x
+    type: int
+    initial_value: '0'
+  - id: touch_last_x
+    type: int
+    initial_value: '0'
+  - id: touch_start_y
+    type: int
+    initial_value: '0'
+  - id: touch_last_y
+    type: int
+    initial_value: '0'
+  - id: vaha_tare
+    type: float
+    initial_value: '0.0'
+
+touchscreen:
+  - platform: xpt2046
+    id: my_touch
+    cs_pin: GPIO46
+    update_interval: 50ms
+    display: my_display
+    calibration:
+      x_min: 300
+      x_max: 3800
+      y_min: 300
+      y_max: 3800
+    transform:
+      swap_xy: true
+      mirror_x: true
+      mirror_y: true
+    on_touch:
+      then:
+        - lambda: |-
+            id(touch_start_x) = touch.x;
+            id(touch_start_y) = touch.y;
+            id(touch_last_x) = touch.x;
+            id(touch_last_y) = touch.y;
+    on_update:
+      then:
+        - lambda: |-
+            if (!touches.empty()) {
+              id(touch_last_x) = touches[0].x;
+              id(touch_last_y) = touches[0].y;
+            }
+    on_release:
+      then:
+        - lambda: |-
+            int dx = id(touch_last_x) - id(touch_start_x);
+            int dy = id(touch_last_y) - id(touch_start_y);
+            if (abs(dx) < 20 && abs(dy) < 20) {
+              if (id(my_display).get_active_page() == id(page_led)) {
+                int tx = id(touch_last_x);
+                int ty = id(touch_last_y);
+                if (ty > 60 && ty < 120) {
+                  if (tx > 20 && tx < 110) id(led_pasek).turn_on().perform();
+                  if (tx > 130 && tx < 220) id(led_pasek).turn_off().perform();
+                }
+                if (ty > 140 && ty < 190) {
+                  auto call = id(led_pasek).turn_on();
+                  call.set_color_mode(ColorMode::RGB);
+                  if (tx > 20 && tx < 80) call.set_rgb(1.0, 0.0, 0.0);
+                  if (tx > 90 && tx < 150) call.set_rgb(0.0, 1.0, 0.0);
+                  if (tx > 160 && tx < 220) call.set_rgb(0.0, 0.0, 1.0);
+                  call.perform();
+                }
+              }
+            } else if (dx < -50 || dy < -50) {
+              id(my_display).show_next_page();
+            } else if (dx > 50 || dy > 50) {
+              id(my_display).show_prev_page();
+            }
+
+interval:
+  - interval: 200ms
+    then:
+      - lambda: |-
+          id(blink_timer)++;
+          if (id(blink_timer) == 15) {
+            id(blink_state) = true;
+          } else if (id(blink_timer) >= 17) {
+            id(blink_state) = false;
+            id(blink_timer) = 0;
+          }
+
+button:
+  - platform: template
+    name: "Dalsi stranka"
+    on_press:
+      - display.page.show_next: my_display
+      - component.update: my_display
+  - platform: template
+    name: "Predchozi stranka"
+    on_press:
+      - display.page.show_previous: my_display
+      - component.update: my_display
 
 sensor:
   - platform: hx711
@@ -46,8 +156,9 @@ sensor:
     update_interval: 2s
     filters:
       - calibrate_linear:
-          - 0.0 -> 0.0
-          - 1000000.0 -> 1000.0
+          - -1329305.0 -> 0.0
+          - -794231.0 -> 1.0
+      - lambda: "return x - id(vaha_tare);"
     unit_of_measurement: "kg"
     accuracy_decimals: 1
 
@@ -64,7 +175,7 @@ sensor:
     name: "Vzdalenost"
     id: vzdalenost
     update_interval: 2s
-    timeout: 3m
+    timeout: 0.5m
     pulse_time: 20us
 
   - platform: template
@@ -74,10 +185,14 @@ sensor:
     accuracy_decimals: 0
     update_interval: 3s
     lambda: |-
-      if (!id(vaha).has_state() || isnan(id(vaha).state)) return {};
-      float v = id(vaha).state;
-      if (v < 0) v = 0;
-      float p = (v / 5.0) * 100.0;
+      if (!id(vzdalenost).has_state() || isnan(id(vzdalenost).state)) return {};
+      float dist = id(vzdalenost).state;
+      float empty_depth = 0.27;
+      float full_depth = 0.20;
+      if (dist > empty_depth) dist = empty_depth;
+      if (dist < full_depth) dist = full_depth;
+      float p = ((empty_depth - dist) / (empty_depth - full_depth)) * 100.0;
+      if (p < 0) p = 0;
       if (p > 100) p = 100;
       return p;
 
@@ -111,32 +226,155 @@ light:
     rgb_order: GRB
 
 display:
-  - platform: ili9xxx
+  - platform: mipi_spi
+    id: my_display
     model: ILI9341
     dimensions:
-      width: 320
-      height: 240
+      width: 240
+      height: 320
     color_order: bgr
     cs_pin: GPIO10
     dc_pin: GPIO9
     reset_pin: GPIO8
-    invert_colors: false
+    invert_colors: true
     rotation: 90
-    data_rate: 40MHz
-    update_interval: 1s
+    data_rate: 10MHz
+    update_interval: 500ms
     auto_clear_enabled: true
-    lambda: |-
-      it.fill(Color::BLACK);
-      it.printf(12, 30, id(font_big), id(c_white), "Mr. Bin");
-      if (id(vaha).has_state()) {
-        it.printf(12, 70, id(font_med), id(c_white), "Vaha: %.1f kg", id(vaha).state);
-      }
-      if (id(vzduch).has_state()) {
-        it.printf(12, 100, id(font_med), id(c_green), "Vzduch: %.0f", id(vzduch).state * 1241.0);
-      }
-      if (id(plnost).has_state()) {
-        it.printf(12, 130, id(font_med), id(c_white), "Plnost: %.0f %%", id(plnost).state);
-      }
+    pages:
+      - id: page_face
+        lambda: |-
+          it.fill(Color::BLACK);
+          int cy = 78;
+          int lx = 118;
+          int rx = 202;
+          int er = 32;
+          if (!id(blink_state)) {
+            it.filled_circle(lx, cy, er, id(c_white));
+            it.filled_circle(rx, cy, er, id(c_white));
+            it.filled_circle(lx + 3, cy + 3, 17, id(c_green));
+            it.filled_circle(rx + 3, cy + 3, 17, id(c_green));
+            it.filled_circle(lx + 3, cy + 3, 7, Color::BLACK);
+            it.filled_circle(rx + 3, cy + 3, 7, Color::BLACK);
+            it.filled_circle(lx - 8, cy - 10, 5, id(c_white));
+            it.filled_circle(rx - 8, cy - 10, 5, id(c_white));
+            it.filled_circle(lx + 6, cy - 3, 2, id(c_white));
+            it.filled_circle(rx + 6, cy - 3, 2, id(c_white));
+          } else {
+            for (int t = 0; t < 3; t++) {
+              it.line(lx - er, cy + t, lx, cy - 12 + t, id(c_white));
+              it.line(lx, cy - 12 + t, lx + er, cy + t, id(c_white));
+              it.line(rx - er, cy + t, rx, cy - 12 + t, id(c_white));
+              it.line(rx, cy - 12 + t, rx + er, cy + t, id(c_white));
+            }
+          }
+          it.filled_circle(lx - 30, cy + 22, 7, id(c_pink));
+          it.filled_circle(rx + 30, cy + 22, 7, id(c_pink));
+          for (int t = 0; t < 2; t++) {
+            it.line(145, 122 + t, 155, 128 + t, id(c_white));
+            it.line(155, 128 + t, 165, 128 + t, id(c_white));
+            it.line(165, 128 + t, 175, 122 + t, id(c_white));
+          }
+          it.horizontal_line(100, 152, 120, id(c_green));
+          it.printf(160, 158, id(font_title), id(c_white), TextAlign::TOP_CENTER, "Mr. Bin");
+          it.filled_circle(132, 220, 4, id(c_green));
+          it.filled_circle(146, 220, 2, id(c_grey));
+          it.filled_circle(160, 220, 2, id(c_grey));
+          it.filled_circle(174, 220, 2, id(c_grey));
+          it.filled_circle(188, 220, 2, id(c_grey));
+
+      - id: page_weight
+        lambda: |-
+          it.fill(Color::BLACK);
+          it.printf(160, 25, id(font_med), id(c_grey), TextAlign::TOP_CENTER, "VAHA");
+          it.filled_rectangle(80, 48, 160, 2, id(c_green));
+          if (id(vaha).has_state()) {
+            it.printf(160, 75, id(font_value), id(c_white), TextAlign::TOP_CENTER, "%.1f", id(vaha).state);
+            it.printf(160, 135, id(font_big), id(c_grey), TextAlign::TOP_CENTER, "kg");
+          } else {
+            it.printf(160, 90, id(font_value), id(c_grey), TextAlign::TOP_CENTER, "---");
+          }
+          it.filled_circle(132, 220, 2, id(c_grey));
+          it.filled_circle(146, 220, 4, id(c_green));
+          it.filled_circle(160, 220, 2, id(c_grey));
+          it.filled_circle(174, 220, 2, id(c_grey));
+          it.filled_circle(188, 220, 2, id(c_grey));
+
+      - id: page_air
+        lambda: |-
+          it.fill(Color::BLACK);
+          it.printf(160, 25, id(font_med), id(c_grey), TextAlign::TOP_CENTER, "VZDUCH");
+          it.filled_rectangle(80, 48, 160, 2, id(c_green));
+          if (id(vzduch).has_state()) {
+            float val = id(vzduch).state * 1241.0;
+            Color c = id(c_green);
+            if (val > 800) c = id(c_red);
+            else if (val > 400) c = id(c_yellow);
+            it.printf(160, 75, id(font_value), c, TextAlign::TOP_CENTER, "%.0f", val);
+            it.printf(160, 135, id(font_big), id(c_grey), TextAlign::TOP_CENTER, "ppm");
+          } else {
+            it.printf(160, 90, id(font_value), id(c_grey), TextAlign::TOP_CENTER, "---");
+          }
+          it.filled_circle(132, 220, 2, id(c_grey));
+          it.filled_circle(146, 220, 2, id(c_grey));
+          it.filled_circle(160, 220, 4, id(c_green));
+          it.filled_circle(174, 220, 2, id(c_grey));
+          it.filled_circle(188, 220, 2, id(c_grey));
+
+      - id: page_fullness
+        lambda: |-
+          it.fill(Color::BLACK);
+          it.printf(160, 25, id(font_med), id(c_grey), TextAlign::TOP_CENTER, "PLNOST");
+          it.filled_rectangle(80, 48, 160, 2, id(c_green));
+          float pct = 0;
+          Color bar_color = id(c_green);
+          if (id(plnost).has_state()) {
+            pct = id(plnost).state;
+            if (pct > 75) bar_color = id(c_red);
+            else if (pct > 50) bar_color = id(c_yellow);
+            it.printf(160, 70, id(font_value), bar_color, TextAlign::TOP_CENTER, "%.0f%%", pct);
+            if (id(vzdalenost).has_state() && !isnan(id(vzdalenost).state)) {
+              it.printf(160, 115, id(font_med), id(c_grey), TextAlign::TOP_CENTER, "%.2f m", id(vzdalenost).state);
+            }
+          } else {
+            it.printf(160, 90, id(font_value), id(c_grey), TextAlign::TOP_CENTER, "---");
+          }
+          it.rectangle(60, 140, 200, 18, id(c_grey));
+          int fill_w = (int)(pct * 2.0);
+          if (fill_w > 200) fill_w = 200;
+          if (fill_w > 0) {
+            it.filled_rectangle(60, 140, fill_w, 18, bar_color);
+          }
+          it.filled_circle(132, 220, 2, id(c_grey));
+          it.filled_circle(146, 220, 2, id(c_grey));
+          it.filled_circle(160, 220, 2, id(c_grey));
+          it.filled_circle(174, 220, 4, id(c_green));
+          it.filled_circle(188, 220, 2, id(c_grey));
+
+      - id: page_led
+        lambda: |-
+          it.fill(Color::BLACK);
+          it.printf(160, 25, id(font_med), id(c_grey), TextAlign::TOP_CENTER, "LED PASEK");
+          it.filled_rectangle(80, 48, 160, 2, id(c_green));
+          
+          bool is_on = id(led_pasek).remote_values.is_on();
+          Color btn_on = is_on ? id(c_green) : id(c_grey);
+          Color btn_off = !is_on ? id(c_red) : id(c_grey);
+          
+          it.filled_rectangle(20, 60, 90, 60, btn_on);
+          it.printf(65, 80, id(font_med), id(c_white), TextAlign::CENTER, "ZAP");
+          
+          it.filled_rectangle(130, 60, 90, 60, btn_off);
+          it.printf(175, 80, id(font_med), id(c_white), TextAlign::CENTER, "VYP");
+          
+          it.filled_rectangle(20, 140, 60, 50, id(c_red));
+          it.filled_rectangle(90, 140, 60, 50, id(c_green));
+          it.filled_rectangle(160, 140, 60, 50, id(c_blue));
+          it.filled_circle(132, 220, 2, id(c_grey));
+          it.filled_circle(146, 220, 2, id(c_grey));
+          it.filled_circle(160, 220, 2, id(c_grey));
+          it.filled_circle(174, 220, 2, id(c_grey));
+          it.filled_circle(188, 220, 4, id(c_green));
 
 color:
   - id: c_white
@@ -144,23 +382,38 @@ color:
     green: 100%
     blue: 100%
   - id: c_green
+    red: 0%
     green: 100%
+    blue: 30%
   - id: c_yellow
     red: 100%
-    green: 100%
+    green: 90%
+    blue: 0%
   - id: c_red
     red: 100%
+    green: 20%
+    blue: 20%
   - id: c_blue
     blue: 100%
-  - id: c_grey
-    red: 50%
-    green: 50%
+  - id: c_pink
+    red: 100%
+    green: 40%
     blue: 50%
+  - id: c_grey
+    red: 40%
+    green: 40%
+    blue: 40%
 
 font:
-  - file: "gfonts://Roboto"
+  - file: "gfonts://Montserrat"
+    id: font_value
+    size: 48
+  - file: "gfonts://Montserrat"
+    id: font_title
+    size: 28
+  - file: "gfonts://Montserrat"
     id: font_big
-    size: 20
-  - file: "gfonts://Roboto"
+    size: 22
+  - file: "gfonts://Montserrat"
     id: font_med
-    size: 14
+    size: 16
