@@ -1,0 +1,166 @@
+esphome:
+  name: mrbin
+  friendly_name: Mr. Bin
+  platformio_options:
+    board_build.flash_mode: dio
+    build_flags:
+      - "-DBOARD_HAS_PSRAM"
+      - "-mfix-esp32-psram-cache-issue"
+
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 16MB
+  framework:
+    type: arduino
+
+logger:
+
+api:
+  encryption:
+    key: "HNMTUK7gFPiuqdxBeidte8QGK1n8t57IG6UDnB4YwnE="
+
+ota:
+  - platform: esphome
+    password: "4cd96131cbd8bdfaf9d6038c4077343d"
+
+wifi:
+  ssid: "Holy-wifi"
+  password: "661198Ho"
+  ap:
+    ssid: "Mrbin Fallback Hotspot"
+    password: "TzUgAxop4etP"
+
+captive_portal:
+
+spi:
+  clk_pin: GPIO12
+  mosi_pin: GPIO11
+
+sensor:
+  - platform: hx711
+    name: "Vaha"
+    id: vaha
+    dout_pin: GPIO6
+    clk_pin: GPIO14
+    gain: 128
+    update_interval: 2s
+    filters:
+      - calibrate_linear:
+          - 0.0 -> 0.0
+          - 1000000.0 -> 1000.0
+    unit_of_measurement: "kg"
+    accuracy_decimals: 1
+
+  - platform: adc
+    name: "Kvalita vzduchu"
+    id: vzduch
+    pin: GPIO2
+    attenuation: 12db
+    update_interval: 5s
+
+  - platform: ultrasonic
+    trigger_pin: GPIO4
+    echo_pin: GPIO5
+    name: "Vzdalenost"
+    id: vzdalenost
+    update_interval: 2s
+    timeout: 3m
+    pulse_time: 20us
+
+  - platform: template
+    name: "Plnost kose"
+    id: plnost
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    update_interval: 3s
+    lambda: |-
+      if (!id(vaha).has_state() || isnan(id(vaha).state)) return {};
+      float v = id(vaha).state;
+      if (v < 0) v = 0;
+      float p = (v / 5.0) * 100.0;
+      if (p > 100) p = 100;
+      return p;
+
+  - platform: uptime
+    name: "Uptime"
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "IP adresa"
+      id: wifi_ip
+
+output:
+  - platform: ledc
+    pin: GPIO7
+    id: backlight_pwm
+    frequency: 1000Hz
+
+light:
+  - platform: monochromatic
+    output: backlight_pwm
+    name: "Podsviceni displeje"
+    restore_mode: ALWAYS_ON
+
+  - platform: esp32_rmt_led_strip
+    pin: GPIO15
+    num_leds: 30
+    name: "LED pasek"
+    id: led_pasek
+    chipset: WS2812
+    rgb_order: GRB
+
+display:
+  - platform: ili9xxx
+    model: ILI9341
+    dimensions:
+      width: 320
+      height: 240
+    color_order: bgr
+    cs_pin: GPIO10
+    dc_pin: GPIO9
+    reset_pin: GPIO8
+    invert_colors: false
+    rotation: 90
+    data_rate: 40MHz
+    update_interval: 1s
+    auto_clear_enabled: true
+    lambda: |-
+      it.fill(Color::BLACK);
+      it.printf(12, 30, id(font_big), id(c_white), "Mr. Bin");
+      if (id(vaha).has_state()) {
+        it.printf(12, 70, id(font_med), id(c_white), "Vaha: %.1f kg", id(vaha).state);
+      }
+      if (id(vzduch).has_state()) {
+        it.printf(12, 100, id(font_med), id(c_green), "Vzduch: %.0f", id(vzduch).state * 1241.0);
+      }
+      if (id(plnost).has_state()) {
+        it.printf(12, 130, id(font_med), id(c_white), "Plnost: %.0f %%", id(plnost).state);
+      }
+
+color:
+  - id: c_white
+    red: 100%
+    green: 100%
+    blue: 100%
+  - id: c_green
+    green: 100%
+  - id: c_yellow
+    red: 100%
+    green: 100%
+  - id: c_red
+    red: 100%
+  - id: c_blue
+    blue: 100%
+  - id: c_grey
+    red: 50%
+    green: 50%
+    blue: 50%
+
+font:
+  - file: "gfonts://Roboto"
+    id: font_big
+    size: 20
+  - file: "gfonts://Roboto"
+    id: font_med
+    size: 14
