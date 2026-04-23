@@ -7,17 +7,31 @@ import Chip from "@/components/Chip";
 
 export default function SettingsPage() {
   const { settings, setSettings, showToast } = useSim();
-  const [espIp, setEspIp] = useState("192.168.1.100");
-  const [espPort, setEspPort] = useState("6053");
   const [mqtt, setMqtt] = useState("");
-  const [connStatus, setConnStatus] = useState("Status: Simulated Mode");
+  const [connStatus, setConnStatus] = useState("Status: Ready");
 
   function testConnection() {
     setConnStatus("Status: Testing...");
-    setTimeout(() => {
-      setConnStatus("Status: Simulated Mode (no ESP32 detected)");
-      showToast("Connection test complete (simulated)");
-    }, 1500);
+    if (settings.useRealData && settings.espIp) {
+      fetch(`/api/esp/sensor/vaha?ip=${encodeURIComponent(settings.espIp)}`)
+        .then(res => {
+          if (res.ok) {
+            setConnStatus("Status: Connected to ESP32 successfully!");
+            showToast("Connection test passed!");
+          } else {
+            throw new Error("HTTP " + res.status);
+          }
+        })
+        .catch(err => {
+          setConnStatus("Status: Failed to connect (" + err.message + ")");
+          showToast("Connection test failed");
+        });
+    } else {
+      setTimeout(() => {
+        setConnStatus("Status: Simulated Mode (no ESP32 configured)");
+        showToast("Using simulated data");
+      }, 500);
+    }
   }
 
   function resetAll() {
@@ -198,31 +212,35 @@ export default function SettingsPage() {
         <div className="bg-surface-low rounded-[2rem] p-8">
           <h3 className="font-display text-lg font-bold mb-8">Connection</h3>
 
+          <div className="flex items-center justify-between py-3 mb-4">
+            <div className="flex-1 mr-4">
+              <div className="text-sm font-medium">Use Real ESP32 Data</div>
+              <div className="text-xs text-on-surface-variant">
+                Fetch live sensor data instead of simulating
+              </div>
+            </div>
+            <Toggle
+              checked={settings.useRealData}
+              onChange={(v) =>
+                setSettings((s) => ({ ...s, useRealData: v }))
+              }
+            />
+          </div>
+
           <div className="mb-5 text-left">
             <label className="block text-xs font-medium text-on-surface-variant uppercase tracking-wider mb-2">
               ESP32 IP Address
             </label>
             <input
               type="text"
-              value={espIp}
-              onChange={(e) => setEspIp(e.target.value)}
+              value={settings.espIp}
+              onChange={(e) => setSettings((s) => ({ ...s, espIp: e.target.value }))}
               className="w-full px-5 py-3 bg-surface-container rounded-[1.5rem] text-sm outline-none focus:bg-surface-high transition-colors"
               placeholder="192.168.1.100"
             />
           </div>
 
-          <div className="mb-5 text-left">
-            <label className="block text-xs font-medium text-on-surface-variant uppercase tracking-wider mb-2">
-              ESPHome API Port
-            </label>
-            <input
-              type="text"
-              value={espPort}
-              onChange={(e) => setEspPort(e.target.value)}
-              className="w-full px-5 py-3 bg-surface-container rounded-[1.5rem] text-sm outline-none focus:bg-surface-high transition-colors"
-              placeholder="6053"
-            />
-          </div>
+
 
           <div className="mb-5 text-left">
             <label className="block text-xs font-medium text-on-surface-variant uppercase tracking-wider mb-2">

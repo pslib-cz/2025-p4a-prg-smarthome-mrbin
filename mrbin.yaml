@@ -20,6 +20,9 @@ psram:
 
 logger:
 
+web_server:
+  port: 80
+
 api:
   encryption:
     key: "HNMTUK7gFPiuqdxBeidte8QGK1n8t57IG6UDnB4YwnE="
@@ -29,8 +32,8 @@ ota:
     password: "4cd96131cbd8bdfaf9d6038c4077343d"
 
 wifi:
-  ssid: "Holy-wifi"
-  password: "661198Ho"
+  ssid: "MARTINEEEK4750"
+  password: "2m9:62T4"
   ap:
     ssid: "Mrbin Fallback Hotspot"
     password: "TzUgAxop4etP"

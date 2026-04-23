@@ -66,6 +66,8 @@ export interface Settings {
   friendMessages: boolean;
   soundAlerts: boolean;
   pushNotifications: boolean;
+  useRealData: boolean;
+  espIp: string;
 }
 
 interface SimContextType {
@@ -151,6 +153,8 @@ export function SimulationProvider({ children }: { children: React.ReactNode }) 
       friendMessages: true,
       soundAlerts: true,
       pushNotifications: false,
+      useRealData: false,
+      espIp: "192.168.1.100",
     };
   });
 
@@ -227,17 +231,56 @@ export function SimulationProvider({ children }: { children: React.ReactNode }) 
     ]);
   }, []);
 
-  // Simulation tick
+  // Simulation or Real Data tick
   useEffect(() => {
-    const interval = setInterval(() => {
-      setSensors((s) => {
-        const weight = clamp(s.weight + (Math.random() - 0.48) * 0.1, 0.1, 6);
-        const fillLevel = clamp(s.fillLevel + (Math.random() - 0.3) * 0.5, 0, 100);
-        const aqi = clamp(s.aqi + (Math.random() - 0.5) * 5, 10, 350);
-        const temperature = clamp(s.temperature + (Math.random() - 0.5) * 0.2, 16, 32);
-        const fillCm = +((100 - fillLevel) / 100 * 30).toFixed(1);
-        return { ...s, weight, fillLevel, fillCm, aqi, temperature };
-      });
+    const interval = setInterval(async () => {
+      const st = settingsRef.current;
+      
+      if (st.useRealData && st.espIp) {
+        // Fetch real data from ESP32 via Next.js proxy
+        try {
+          const fetchSensor = async (id: string) => {
+            const res = await fetch(`/api/esp/sensor/${id}?ip=${encodeURIComponent(st.espIp)}`);
+            if (!res.ok) throw new Error("Failed");
+            const data = await res.json();
+            return typeof data.value === "number" && !isNaN(data.value) ? data.value : 0;
+          };
+
+          const [weight, aqiRaw, plnost, tempRaw] = await Promise.all([
+            fetchSensor("vaha"),
+            fetchSensor("vzduch"),
+            fetchSensor("plnost"),
+            // Fallback for temperature as we don't have a real temp sensor in yaml yet
+            Promise.resolve(sensorsRef.current.temperature + (Math.random() - 0.5) * 0.2),
+          ]);
+
+          setSensors((s) => {
+            const aqi = aqiRaw * 1241.0; // Conversion logic from yaml
+            const fillCm = +((100 - plnost) / 100 * 30).toFixed(1);
+            return {
+              ...s,
+              weight: clamp(weight, 0, 100),
+              fillLevel: clamp(plnost, 0, 100),
+              fillCm,
+              aqi: clamp(aqi, 0, 1000),
+              temperature: clamp(tempRaw, -20, 60),
+            };
+          });
+        } catch (err) {
+          console.error("Failed to fetch from ESP32", err);
+          // Don't modify state if fetch fails to avoid flashing zeros
+        }
+      } else {
+        // Simulated tick
+        setSensors((s) => {
+          const weight = clamp(s.weight + (Math.random() - 0.48) * 0.1, 0.1, 6);
+          const fillLevel = clamp(s.fillLevel + (Math.random() - 0.3) * 0.5, 0, 100);
+          const aqi = clamp(s.aqi + (Math.random() - 0.5) * 5, 10, 350);
+          const temperature = clamp(s.temperature + (Math.random() - 0.5) * 0.2, 16, 32);
+          const fillCm = +((100 - fillLevel) / 100 * 30).toFixed(1);
+          return { ...s, weight, fillLevel, fillCm, aqi, temperature };
+        });
+      }
 
       setHistory((h) => {
         const now = Date.now();
