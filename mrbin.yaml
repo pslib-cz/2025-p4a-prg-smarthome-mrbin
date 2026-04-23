@@ -74,12 +74,15 @@ sensor:
     accuracy_decimals: 0
     update_interval: 3s
     lambda: |-
-      if (!id(vaha).has_state() || isnan(id(vaha).state)) return {};
-      float v = id(vaha).state;
-      if (v < 0) v = 0;
-      float p = (v / 5.0) * 100.0;
-      if (p > 100) p = 100;
-      return p;
+      if (!id(vzdalenost).has_state() || isnan(id(vzdalenost).state)) return {};
+      float d = id(vzdalenost).state; // Výstup je v metrech
+      float empty_dist = 0.27; // 27 cm - prázdno
+      float full_dist = 0.02;  // 2 cm - plno (minimální měřitelná vzdálenost pro HC-SR04)
+      
+      if (d > empty_dist) d = empty_dist;
+      if (d < full_dist) d = full_dist;
+      
+      return ((empty_dist - d) / (empty_dist - full_dist)) * 100.0;
 
   - platform: uptime
     name: "Uptime"
